@@ -2,33 +2,36 @@
 
 import type { MemoryMetadata } from "./types.js";
 
+function calculateRelevance(memory: MemoryMetadata, query: string): number {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (normalizedQuery.length < 2 || normalizedQuery.length > 256) {
+    throw new Error("Invalid query");
+  }
+
+  let score = 0;
+  const summary = typeof memory.summary === "string" ? memory.summary.toLowerCase() : "";
+  const tags = Array.isArray(memory.tags) ? memory.tags : [];
+
+  if (summary.includes(normalizedQuery)) score += 0.5;
+  if (tags.some(tag => typeof tag === "string" && tag.toLowerCase().includes(normalizedQuery))) score += 0.3;
+
+  const createdMs = Date.parse(memory.createdAt);
+  if (!Number.isFinite(createdMs)) return score;
+
+  const diffMs = Date.now() - createdMs;
+  if (diffMs < 0) return score;
+
+  const diffDays = diffMs / (1000 * 60 * 60 * 24);
+  if (diffDays <= 1) score += 0.2;
+  else if (diffDays <= 7) score += 0.1;
+
+  return Math.min(score, 1.0);
+}
+
 export class CCREngine {
   calculateRelevanceScore(memory: MemoryMetadata, query: string): number {
-    let score = 0.0;
-
-    if (memory.summary.toLowerCase().includes(query.toLowerCase())) {
-      score += 0.6;
-    }
-
-    if (memory.tags.some(tag => tag.toLowerCase().includes(query.toLowerCase()))) {
-      score += 0.3;
-    }
-
-    const recencyScore = this.calculateRecencyScore(memory.createdAt);
-    score += recencyScore * 0.1;
-
-    return Math.min(score, 1.0);
-  }
-
-  private calculateRecencyScore(createdAt: string): number {
-    const now = new Date();
-    const created = new Date(createdAt);
-    const diffDays = (now.getTime() - created.getTime()) / (1000 * 60 * 60 * 24);
-
-    if (diffDays <= 1) return 1.0;
-    if (diffDays <= 7) return 0.8;
-    if (diffDays <= 30) return 0.6;
-    if (diffDays <= 90) return 0.4;
-    return 0.2;
+    return calculateRelevance(memory, query);
   }
 }
+
+export { calculateRelevance };

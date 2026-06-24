@@ -29,6 +29,7 @@ export interface CloudflareBindings {
 
 export interface LLMConfig {
   primaryProvider: "groq" | "ollama" | "openrouter" | "nvidia";
+  allowExternal?: boolean;
   groq?: {
     apiKey: string;
     model: string;
@@ -49,8 +50,9 @@ export interface LLMConfig {
 }
 
 export interface MemOceanConfig {
-  masterSecret: string;
-  hkdfSalt: string;
+  masterSecret?: string | Uint8Array;
+  projectSalt?: string | Uint8Array;
+  keyVersion?: number;
   bindings: CloudflareBindings;
   llm: LLMConfig;
 }
@@ -59,7 +61,7 @@ export interface MemoryInput {
   content: string;
   summary: string;
   tags: string[];
-  sessionId: string;
+  sessionId?: string;
   projectId: string;
   agentType: string;
 }
@@ -82,6 +84,8 @@ export interface Session {
   parentSessionId?: string;
   agentType: string;
   createdAt: string;
+  expiresAt: string;
+  status: "active" | "expired" | "revoked";
 }
 
 export interface AnalysisResult {

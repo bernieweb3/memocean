@@ -1,43 +1,64 @@
-import type { MemoryMetadata } from "./types.js";
-import { v4 as uuidv4 } from "uuid";
+import type { MemoryMetadata, Session } from "./types.js";
+import { TokenBudgeter } from "./token-budget.js";
 
-type QueryFn = (sql: string, ...params: unknown[]) => Promise<void>;
+type InsertSessionFn = (session: Session) => Promise<void>;
+type GetSessionFn = (projectId: string, sessionId: string) => Promise<Session | null>;
+
+const ID_RE = /^[a-zA-Z0-9_-]{8,128}$/;
+const DEFAULT_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+
+function assertId(value: string, name: string): void {
+  if (typeof value !== "string" || !ID_RE.test(value)) throw new Error(`${name} invalid format`);
+}
+
+function assertAgentType(agentType: string): void {
+  if (typeof agentType !== "string" || agentType.length === 0 || agentType.length > 64) {
+    throw new Error("agentType invalid length");
+  }
+}
 
 export class SessionManager {
-  constructor(private queryFn: QueryFn) {}
+  private budgeter = new TokenBudgeter();
+
+  constructor(
+    private insertSessionFn: InsertSessionFn,
+    private getSessionFn?: GetSessionFn,
+    private ttlMs = DEFAULT_SESSION_TTL_MS
+  ) {}
 
   async createSession(projectId: string, agentType: string, parentSessionId?: string): Promise<string> {
-    const sessionId = uuidv4();
-    const createdAt = new Date().toISOString();
+    assertId(projectId, "projectId");
+    assertAgentType(agentType);
+    if (parentSessionId) assertId(parentSessionId, "parentSessionId");
 
-    await this.linkSession(sessionId, projectId, agentType, parentSessionId, createdAt);
+    const sessionId = crypto.randomUUID();
+    const createdAt = new Date().toISOString();
+    const expiresAt = new Date(Date.now() + this.ttlMs).toISOString();
+
+    await this.insertSessionFn({
+      id: sessionId,
+      projectId,
+      agentType,
+      parentSessionId,
+      createdAt,
+      expiresAt,
+      status: "active",
+    });
 
     return sessionId;
   }
 
-  async linkSession(
-    sessionId: string,
-    projectId: string,
-    agentType: string,
-    parentSessionId?: string,
-    createdAt?: string
-  ): Promise<void> {
-    if (!createdAt) createdAt = new Date().toISOString();
+  async assertSessionActive(projectId: string, sessionId: string): Promise<void> {
+    assertId(projectId, "projectId");
+    assertId(sessionId, "sessionId");
+    if (!this.getSessionFn) throw new Error("Session lookup unavailable");
 
-    await this.queryFn(
-      `INSERT INTO sessions (id, project_id, agent_type, parent_session_id, created_at) VALUES (?, ?, ?, ?, ?)`,
-      sessionId, projectId, agentType, parentSessionId || null, createdAt
-    );
+    const session = await this.getSessionFn(projectId, sessionId);
+    if (!session || session.status !== "active") throw new Error("Invalid session");
+    if (Date.now() > Date.parse(session.expiresAt)) throw new Error("Session expired");
   }
 
   filterByRelevance(memories: MemoryMetadata[], tokenLimit: number): MemoryMetadata[] {
-    return memories
-      .sort((a, b) => {
-        if (b.relevanceScore !== a.relevanceScore) {
-          return b.relevanceScore - a.relevanceScore;
-        }
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-      })
-      .slice(0, tokenLimit);
+    return this.budgeter.allocate(memories, tokenLimit);
   }
 }

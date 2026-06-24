@@ -1,15 +1,94 @@
 import type { AnalysisResult, LLMConfig } from "./types.js";
 
-interface OpenAIResponse {
-  choices: Array<{
-    message: {
-      content: string;
-    };
-  }>;
-}
-
 interface LLMClient {
   analyze(code: string): Promise<AnalysisResult>;
+}
+
+const MAX_CODE_CHARS = 200 * 1024;
+const DEFAULT_TIMEOUT_MS = 15_000;
+
+async function fetchWithTimeout(url: string, init: RequestInit, ms = DEFAULT_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseOpenAIContent(data: unknown): string {
+  if (
+    typeof data === "object" && data !== null &&
+    Array.isArray((data as { choices?: unknown[] }).choices) &&
+    typeof (data as any).choices[0]?.message?.content === "string"
+  ) {
+    const content = (data as any).choices[0].message.content;
+    if (content.length > 200_000) throw new Error("Provider response too large");
+    return content;
+  }
+  throw new Error("Invalid provider response");
+}
+
+function normalizeAnalysisResult(value: unknown, fallbackSummary: string): AnalysisResult {
+  if (typeof value === "object" && value !== null) {
+    const obj = value as Partial<AnalysisResult>;
+    return {
+      lessons: Array.isArray(obj.lessons) ? obj.lessons.filter((v): v is string => typeof v === "string") : [],
+      patterns: Array.isArray(obj.patterns) ? obj.patterns.filter((v): v is string => typeof v === "string") : [],
+      summary: typeof obj.summary === "string" ? obj.summary : fallbackSummary,
+    };
+  }
+  return { lessons: [], patterns: [], summary: fallbackSummary };
+}
+
+function parseAnalysisContent(content: string): AnalysisResult {
+  try {
+    return normalizeAnalysisResult(JSON.parse(content), content);
+  } catch {
+    return { lessons: [], patterns: [], summary: content };
+  }
+}
+
+function validateCode(code: string): void {
+  if (typeof code !== "string" || code.length === 0 || code.length > MAX_CODE_CHARS) {
+    throw new Error("Invalid code length");
+  }
+}
+
+async function callOpenAICompatible(
+  url: string,
+  headers: Record<string, string>,
+  model: string,
+  code: string
+): Promise<AnalysisResult> {
+  validateCode(code);
+
+  const response = await fetchWithTimeout(url, {
+    method: "POST",
+    headers: {
+      ...headers,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model,
+      messages: [
+        {
+          role: "system",
+          content: "Analyze code and return strict JSON with string[] lessons, string[] patterns, and string summary.",
+        },
+        {
+          role: "user",
+          content: `Analyze this code and provide lessons, patterns, and a summary:\n\n${code}`,
+        },
+      ],
+      temperature: 0.2,
+    }),
+  });
+
+  if (!response.ok) throw new Error("Provider request failed");
+  const data = await response.json();
+  return parseAnalysisContent(parseOpenAIContent(data));
 }
 
 export class LLMProviderManager {
@@ -20,13 +99,21 @@ export class LLMProviderManager {
   }
 
   async analyzeCodeSnippet(code: string): Promise<AnalysisResult> {
+    validateCode(code);
     const providers = this.getProviderOrder();
+
+    if (providers.length === 0) {
+      throw new Error("No LLM providers configured");
+    }
 
     for (const provider of providers) {
       try {
         return await provider.client.analyze(code);
       } catch (error) {
-        console.error(`Provider ${provider.name} failed:`, error);
+        console.error("Provider failed", {
+          provider: provider.name,
+          errorType: error instanceof Error ? error.name : typeof error,
+        });
       }
     }
 
@@ -37,81 +124,51 @@ export class LLMProviderManager {
     const cfg = this.config;
     const providers: Array<{ name: string; client: LLMClient }> = [];
 
+    if (cfg.allowExternal === false && cfg.ollama?.model) {
+      const model = cfg.ollama.model;
+      const endpoint = cfg.ollama.endpoint || "http://localhost:11434/v1/";
+      providers.push({
+        name: "ollama",
+        client: {
+          analyze: (code: string) => callOpenAICompatible(
+            `${endpoint.replace(/\/$/, "")}/chat/completions`,
+            cfg.ollama?.apiKey ? { Authorization: `Bearer ${cfg.ollama.apiKey}` } : {},
+            model,
+            code
+          ),
+        },
+      });
+      return providers;
+    }
+
     if (cfg.groq?.apiKey) {
       const apiKey = cfg.groq.apiKey;
       const model = cfg.groq.model || "llama-3.1-70b-versatile";
       providers.push({
         name: "groq",
         client: {
-          async analyze(code: string): Promise<AnalysisResult> {
-            const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model,
-                messages: [
-                  {
-                    role: "system",
-                    content: "You are an AI coding assistant that analyzes code and extracts lessons, patterns, and summaries. Return a JSON object with 'lessons', 'patterns', and 'summary' fields.",
-                  },
-                  {
-                    role: "user",
-                    content: `Analyze this code and provide lessons, patterns, and a summary:\n\n${code}`,
-                  },
-                ],
-              }),
-            });
-
-            const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-            const content = data.choices[0].message.content;
-
-            try {
-              return JSON.parse(content);
-            } catch {
-              return { lessons: [], patterns: [], summary: content };
-            }
-          },
+          analyze: (code: string) => callOpenAICompatible(
+            "https://api.groq.com/openai/v1/chat/completions",
+            { Authorization: `Bearer ${apiKey}` },
+            model,
+            code
+          ),
         },
       });
     }
 
     if (cfg.ollama?.model) {
       const model = cfg.ollama.model;
-      const endpoint = cfg.ollama.endpoint || "https://ollama.com/v1/";
+      const endpoint = cfg.ollama.endpoint || "http://localhost:11434/v1/";
       providers.push({
         name: "ollama",
         client: {
-          async analyze(code: string): Promise<AnalysisResult> {
-            const response = await fetch(`${endpoint}chat/completions`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                model,
-                messages: [
-                  {
-                    role: "system",
-                    content: "You are an AI coding assistant that analyzes code and extracts lessons, patterns, and summaries. Return a JSON object with 'lessons', 'patterns', and 'summary' fields.",
-                  },
-                  {
-                    role: "user",
-                    content: `Analyze this code and provide lessons, patterns, and a summary:\n\n${code}`,
-                  },
-                ],
-              }),
-            });
-
-            const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-            const content = data.choices[0].message.content;
-
-            try {
-              return JSON.parse(content);
-            } catch {
-              return { lessons: [], patterns: [], summary: content };
-            }
-          },
+          analyze: (code: string) => callOpenAICompatible(
+            `${endpoint.replace(/\/$/, "")}/chat/completions`,
+            cfg.ollama?.apiKey ? { Authorization: `Bearer ${cfg.ollama.apiKey}` } : {},
+            model,
+            code
+          ),
         },
       });
     }
@@ -122,37 +179,12 @@ export class LLMProviderManager {
       providers.push({
         name: "openrouter",
         client: {
-          async analyze(code: string): Promise<AnalysisResult> {
-            const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model,
-                messages: [
-                  {
-                    role: "system",
-                    content: "You are an AI coding assistant that analyzes code and extracts lessons, patterns, and summaries. Return a JSON object with 'lessons', 'patterns', and 'summary' fields.",
-                  },
-                  {
-                    role: "user",
-                    content: `Analyze this code and provide lessons, patterns, and a summary:\n\n${code}`,
-                  },
-                ],
-              }),
-            });
-
-            const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-            const content = data.choices[0].message.content;
-
-            try {
-              return JSON.parse(content);
-            } catch {
-              return { lessons: [], patterns: [], summary: content };
-            }
-          },
+          analyze: (code: string) => callOpenAICompatible(
+            "https://openrouter.ai/api/v1/chat/completions",
+            { Authorization: `Bearer ${apiKey}` },
+            model,
+            code
+          ),
         },
       });
     }
@@ -163,41 +195,24 @@ export class LLMProviderManager {
       providers.push({
         name: "nvidia",
         client: {
-          async analyze(code: string): Promise<AnalysisResult> {
-            const response = await fetch("https://integrate.api.nvidia.com/v1/chat/completions", {
-              method: "POST",
-              headers: {
-                "Authorization": `Bearer ${apiKey}`,
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify({
-                model,
-                messages: [
-                  {
-                    role: "system",
-                    content: "You are an AI coding assistant that analyzes code and extracts lessons, patterns, and summaries. Return a JSON object with 'lessons', 'patterns', and 'summary' fields.",
-                  },
-                  {
-                    role: "user",
-                    content: `Analyze this code and provide lessons, patterns, and a summary:\n\n${code}`,
-                  },
-                ],
-              }),
-            });
-
-            const data = await response.json() as { choices: Array<{ message: { content: string } }> };
-            const content = data.choices[0].message.content;
-
-            try {
-              return JSON.parse(content);
-            } catch {
-              return { lessons: [], patterns: [], summary: content };
-            }
-          },
+          analyze: (code: string) => callOpenAICompatible(
+            "https://integrate.api.nvidia.com/v1/chat/completions",
+            { Authorization: `Bearer ${apiKey}` },
+            model,
+            code
+          ),
         },
       });
+    }
+
+    const preferredIndex = providers.findIndex(provider => provider.name === cfg.primaryProvider);
+    if (preferredIndex > 0) {
+      const [preferred] = providers.splice(preferredIndex, 1);
+      providers.unshift(preferred);
     }
 
     return providers;
   }
 }
+
+export { fetchWithTimeout, parseOpenAIContent };

@@ -2,23 +2,64 @@ import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { MemOceanSDK } from "@memocean/sdk";
 import type { MemOceanConfig, CloudflareBindings } from "@memocean/core";
+import { validateAnalyzeArgs, validateRecallArgs, validateRememberArgs } from "./tools.js";
 
+const API_SECRET_KEY = process.env.API_SECRET_KEY;
+if (!API_SECRET_KEY || API_SECRET_KEY.length < 32) {
+  throw new Error("API_SECRET_KEY must be set and >= 32 chars");
+}
+
+const MAX_BODY_BYTES = 1024 * 1024;
 const app = new Hono();
+
+type JsonRpcBody = {
+  jsonrpc?: "2.0";
+  id?: string | number | null;
+  method?: string;
+  params?: {
+    name?: string;
+    arguments?: unknown;
+  };
+};
+
+function timingSafeEqualString(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  const aa = new TextEncoder().encode(a);
+  const bb = new TextEncoder().encode(b);
+  let diff = 0;
+  for (let i = 0; i < aa.length; i++) diff |= aa[i] ^ bb[i];
+  return diff === 0;
+}
+
+async function parseJsonBody(c: { req: { header: (name: string) => string | undefined; arrayBuffer: () => Promise<ArrayBuffer> } }): Promise<JsonRpcBody> {
+  const contentLength = c.req.header("Content-Length");
+  if (contentLength && Number.parseInt(contentLength, 10) > MAX_BODY_BYTES) {
+    throw new Error("Request body too large");
+  }
+
+  const raw = await c.req.arrayBuffer();
+  if (raw.byteLength > MAX_BODY_BYTES) throw new Error("Request body too large");
+  if (raw.byteLength === 0) throw new Error("Empty request body");
+
+  const parsed = JSON.parse(new TextDecoder().decode(raw));
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("Invalid JSON-RPC body");
+  return parsed as JsonRpcBody;
+}
 
 function getBindings(): CloudflareBindings {
   const db = {
     prepare: (sql: string) => ({
       bind: (...params: unknown[]) => ({
         run: async () => {
-          console.log("[D1] exec:", sql, params);
+          console.log("[D1] exec:", sql, params.length);
           return { success: true };
         },
         all: async <T = Record<string, unknown>>() => {
-          console.log("[D1] query:", sql, params);
+          console.log("[D1] query:", sql, params.length);
           return { results: [] as T[], success: true };
         },
         first: async <T = Record<string, unknown>>() => {
-          console.log("[D1] first:", sql, params);
+          console.log("[D1] first:", sql, params.length);
           return null as T | null;
         },
       }),
@@ -27,12 +68,8 @@ function getBindings(): CloudflareBindings {
       console.log("[D1] exec:", sql);
       return { success: true };
     },
-    batch: async (_statements: unknown[]) => {
-      return { success: true };
-    },
-    dump: async () => {
-      return new Uint8Array();
-    },
+    batch: async (_statements: unknown[]) => ({ success: true }),
+    dump: async () => new Uint8Array(),
   };
 
   return {
@@ -65,11 +102,47 @@ function getBindings(): CloudflareBindings {
   };
 }
 
-app.use("*", async (c, next) => {
-  const apiKey = c.req.header("Authorization");
-  const expectedKey = process.env.API_SECRET_KEY;
+function getConfig(): MemOceanConfig {
+  const allowExternal = process.env.MEMOCEAN_ALLOW_EXTERNAL_LLM === "true";
+  const primaryProvider = (process.env.MEMOCEAN_PRIMARY_PROVIDER || "groq") as MemOceanConfig["llm"]["primaryProvider"];
 
-  if (expectedKey && apiKey !== `Bearer ${expectedKey}`) {
+  const config: MemOceanConfig = {
+    bindings: getBindings(),
+    llm: {
+      allowExternal,
+      primaryProvider,
+      groq: {
+        apiKey: process.env.GROQ_API_KEY || "",
+        model: process.env.GROQ_MODEL || "llama-3.1-70b-versatile",
+      },
+      openrouter: {
+        apiKey: process.env.OPENROUTER_API_KEY || "",
+        model: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
+      },
+      nvidia: {
+        apiKey: process.env.NVIDIA_NIM_API_KEY || "",
+        model: process.env.NVIDIA_NIM_MODEL || "meta/llama-3.1-70b-instruct",
+      },
+    },
+  };
+
+  if (process.env.MEMOCEAN_MASTER_SECRET) {
+    config.masterSecret = process.env.MEMOCEAN_MASTER_SECRET;
+    config.projectSalt = process.env.MEMOCEAN_PROJECT_SALT;
+    config.keyVersion = Number.parseInt(process.env.MEMOCEAN_KEY_VERSION || "1", 10);
+  }
+
+  return config;
+}
+
+app.use("*", async (c, next) => {
+  const auth = c.req.header("Authorization");
+  if (!auth?.startsWith("Bearer ")) {
+    return c.json({ error: "Unauthorized" }, 401);
+  }
+
+  const token = auth.slice("Bearer ".length);
+  if (!timingSafeEqualString(token, API_SECRET_KEY)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
@@ -77,13 +150,15 @@ app.use("*", async (c, next) => {
 });
 
 app.post("/mcp", async (c) => {
+  let body: JsonRpcBody | undefined;
+
   try {
-    const body = await c.req.json();
+    body = await parseJsonBody(c);
 
     if (body.method === "initialize") {
       return c.json({
         jsonrpc: "2.0",
-        id: body.id,
+        id: body.id ?? null,
         result: {
           protocolVersion: "2024-11-05",
           capabilities: {
@@ -98,64 +173,10 @@ app.post("/mcp", async (c) => {
       });
     }
 
-    const config: MemOceanConfig = {
-      masterSecret: process.env.MASTER_SECRET || "default-master-secret-change-in-production",
-      hkdfSalt: process.env.HKDF_SALT || "default-hkdf-salt-change-in-production",
-      bindings: getBindings(),
-      llm: {
-        primaryProvider: "groq",
-        groq: {
-          apiKey: process.env.GROQ_API_KEY || "",
-          model: process.env.GROQ_MODEL || "llama-3.1-70b-versatile",
-        },
-      },
-    };
-
-    const sdk = new MemOceanSDK(config);
-
-    if (body.method === "tools/call") {
-      const { name, arguments: args } = body.params;
-      let result;
-
-      switch (name) {
-        case "ocean_remember":
-          await sdk.remember(args);
-          result = { content: [{ type: "text", text: "Memory saved successfully" }] };
-          break;
-        case "ocean_recall": {
-          const memories = await sdk.recall(args.query, args.tokenLimit || 1000);
-          result = { content: [{ type: "text", text: JSON.stringify(memories, null, 2) }] };
-          break;
-        }
-        case "ocean_context": {
-          const memories = await sdk.recall(args.query, args.tokenLimit || 2000);
-          result = { content: [{ type: "text", text: JSON.stringify(memories, null, 2) }] };
-          break;
-        }
-        case "ocean_analyze": {
-          const analysis = await sdk.analyzeCode(args.code);
-          result = { content: [{ type: "text", text: JSON.stringify(analysis, null, 2) }] };
-          break;
-        }
-        default:
-          return c.json({
-            jsonrpc: "2.0",
-            id: body.id,
-            error: { code: -32601, message: `Tool not found: ${name}` },
-          }, 404);
-      }
-
-      return c.json({
-        jsonrpc: "2.0",
-        id: body.id,
-        result,
-      });
-    }
-
     if (body.method === "tools/list") {
       return c.json({
         jsonrpc: "2.0",
-        id: body.id,
+        id: body.id ?? null,
         result: {
           tools: [
             {
@@ -164,14 +185,13 @@ app.post("/mcp", async (c) => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  content: { type: "string" },
-                  summary: { type: "string" },
-                  tags: { type: "array", items: { type: "string" } },
-                  sessionId: { type: "string" },
-                  projectId: { type: "string" },
-                  agentType: { type: "string" },
+                  content: { type: "string", maxLength: 65536 },
+                  summary: { type: "string", maxLength: 2048 },
+                  tags: { type: "array", maxItems: 20, items: { type: "string", maxLength: 64 } },
+                  projectId: { type: "string", pattern: "^[a-zA-Z0-9_-]{8,128}$" },
+                  agentType: { type: "string", maxLength: 64 },
                 },
-                required: ["content", "summary", "tags", "sessionId", "projectId", "agentType"],
+                required: ["content", "summary", "tags", "projectId", "agentType"],
               },
             },
             {
@@ -180,10 +200,11 @@ app.post("/mcp", async (c) => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  query: { type: "string" },
-                  tokenLimit: { type: "number", default: 1000 },
+                  query: { type: "string", maxLength: 256 },
+                  projectId: { type: "string", pattern: "^[a-zA-Z0-9_-]{8,128}$" },
+                  tokenLimit: { type: "number", minimum: 1, maximum: 8000, default: 1000 },
                 },
-                required: ["query"],
+                required: ["query", "projectId"],
               },
             },
             {
@@ -192,19 +213,20 @@ app.post("/mcp", async (c) => {
               inputSchema: {
                 type: "object",
                 properties: {
-                  query: { type: "string" },
-                  tokenLimit: { type: "number", default: 2000 },
+                  query: { type: "string", maxLength: 256 },
+                  projectId: { type: "string", pattern: "^[a-zA-Z0-9_-]{8,128}$" },
+                  tokenLimit: { type: "number", minimum: 1, maximum: 8000, default: 2000 },
                 },
-                required: ["query"],
+                required: ["query", "projectId"],
               },
             },
             {
               name: "ocean_analyze",
-              description: "Analyze code using MemOcean's Learn engine",
+              description: "Analyze code and extract lessons",
               inputSchema: {
                 type: "object",
                 properties: {
-                  code: { type: "string" },
+                  code: { type: "string", maxLength: 204800 },
                 },
                 required: ["code"],
               },
@@ -214,41 +236,78 @@ app.post("/mcp", async (c) => {
       });
     }
 
+    if (body.method !== "tools/call") {
+      return c.json({
+        jsonrpc: "2.0",
+        id: body.id ?? null,
+        error: { code: -32601, message: "Method not found" },
+      }, 404);
+    }
+
+    const toolName = body.params?.name;
+    const args = body.params?.arguments;
+    const sdk = new MemOceanSDK(getConfig());
+    let result: { content: Array<{ type: "text"; text: string }> };
+
+    switch (toolName) {
+      case "ocean_remember":
+        await sdk.remember(validateRememberArgs(args));
+        result = { content: [{ type: "text", text: "Memory saved successfully" }] };
+        break;
+      case "ocean_recall": {
+        const { query, tokenLimit, projectId } = validateRecallArgs(args, 1000);
+        const memories = await sdk.recall(query, tokenLimit, projectId);
+        result = { content: [{ type: "text", text: JSON.stringify(memories, null, 2) }] };
+        break;
+      }
+      case "ocean_context": {
+        const { query, tokenLimit, projectId } = validateRecallArgs(args, 2000);
+        const memories = await sdk.recall(query, tokenLimit, projectId);
+        result = { content: [{ type: "text", text: JSON.stringify(memories, null, 2) }] };
+        break;
+      }
+      case "ocean_analyze": {
+        const { code } = validateAnalyzeArgs(args);
+        const analysis = await sdk.analyzeCode(code);
+        result = { content: [{ type: "text", text: JSON.stringify(analysis, null, 2) }] };
+        break;
+      }
+      default:
+        return c.json({
+          jsonrpc: "2.0",
+          id: body.id ?? null,
+          error: { code: -32601, message: "Tool not found" },
+        }, 404);
+    }
+
     return c.json({
       jsonrpc: "2.0",
-      id: body.id,
-      error: { code: -32601, message: `Method not found: ${body.method}` },
-    }, 404);
+      id: body.id ?? null,
+      result,
+    });
   } catch (error) {
-    console.error("MCP error:", error);
+    console.error("MCP error", {
+      message: error instanceof Error ? error.message : "unknown",
+      stack: error instanceof Error ? error.stack : undefined,
+    });
+
     return c.json({
       jsonrpc: "2.0",
-      error: { code: -32603, message: "Internal error", data: String(error) },
+      id: body?.id ?? null,
+      error: { code: -32603, message: "Internal error" },
     }, 500);
   }
 });
 
-app.get("/mcp", (c) => {
-  c.header("Content-Type", "text/event-stream");
-  c.header("Cache-Control", "no-cache");
-  c.header("Connection", "keep-alive");
-  return c.body("data: connected\n\n");
-});
+app.get("/health", (c) => c.json({ status: "ok" }));
 
-app.delete("/mcp", (c) => {
-  return c.json({ status: "terminated" });
-});
+const port = Number.parseInt(process.env.PORT || "3000", 10);
 
-const PORT = parseInt(process.env.PORT || "3000", 10);
-
-serve({
-  fetch: app.fetch,
-  port: PORT,
-}, (info) => {
-  console.log(`MemOcean MCP Server running on http://localhost:${info.port}`);
-  if (process.argv.includes("--stdio")) {
-    console.log("STDIO mode active");
-  }
-});
+if (typeof process !== "undefined" && process.env.NODE_ENV !== "test") {
+  serve({
+    fetch: app.fetch,
+    port,
+  });
+}
 
 export default app;

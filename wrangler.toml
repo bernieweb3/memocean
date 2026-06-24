@@ -1,5 +1,5 @@
 name = "memocean-mcp-server"
-main = "src/index.ts"
+main = "apps/mcp-server/src/index.ts"
 compatibility_date = "2024-09-23"
 
 [env.production]
@@ -11,21 +11,21 @@ workers_dev = true
 [env.dev]
 workers_dev = true
 
-[vars]
-API_SECRET_KEY = ""
+# Bindings (example — adjust IDs)
+[[env.production.r2_buckets]]
+binding = "R2_BUCKET"
+bucket_name = "memocean-prod"
 
-[assets]
-directory = "./public"
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "memocean-prod"
+database_id = "your-db-id"
 
-[build]
-command = "pnpm build"
-watch_dir = "packages"
+[[env.production.kv_namespaces]]
+binding = "KV"
+id = "your-kv-id"
 
-[deploy]
-command = "pnpm deploy"
-
-[triggers]
-crons = []
-
-[observability]
-enabled = true
+# Secrets MUST be set via:
+# wrangler secret put API_SECRET_KEY --env production
+# wrangler secret put GROQ_API_KEY --env production
+# DO NOT put secrets in [vars]
