@@ -4,9 +4,20 @@ import { MemOceanSDK } from "@memocean/sdk";
 import type { MemOceanConfig, CloudflareBindings } from "@memocean/core";
 import { validateAnalyzeArgs, validateRecallArgs, validateRememberArgs } from "./tools.js";
 
+// CŨ — throw ở top-level (fail khi deploy):
+// const API_SECRET_KEY = process.env.API_SECRET_KEY;
+// if (!API_SECRET_KEY || API_SECRET_KEY.length < 32) {
+//   throw new Error("API_SECRET_KEY must be set and >= 32 chars");
+// }
+
+// MỚI — lazy validation trong middleware:
 const API_SECRET_KEY = process.env.API_SECRET_KEY;
-if (!API_SECRET_KEY || API_SECRET_KEY.length < 32) {
-  throw new Error("API_SECRET_KEY must be set and >= 32 chars");
+
+function validateAuthConfig(): string {
+  if (!API_SECRET_KEY || API_SECRET_KEY.length < 32) {
+    throw new Error("API_SECRET_KEY must be set and >= 32 chars");
+  }
+  return API_SECRET_KEY;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -136,13 +147,15 @@ function getConfig(): MemOceanConfig {
 }
 
 app.use("*", async (c, next) => {
+  const secret = validateAuthConfig(); // lazy, chỉ chạy khi request đến
+
   const auth = c.req.header("Authorization");
   if (!auth?.startsWith("Bearer ")) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
   const token = auth.slice("Bearer ".length);
-  if (!timingSafeEqualString(token, API_SECRET_KEY)) {
+  if (!timingSafeEqualString(token, secret)) {
     return c.json({ error: "Unauthorized" }, 401);
   }
 
