@@ -142,6 +142,10 @@ app.use("*", async (c, next) => {
     return c.json({ status: "ok", service: "memocean-mcp-server" });
   }
 
+  if (c.req.path === "/sse" && c.req.method === "GET") {
+    return await next();
+  }
+
   const secret = getApiSecretKey(c.env as Record<string, string | undefined>);
 
   const auth = c.req.header("Authorization");
@@ -155,6 +159,57 @@ app.use("*", async (c, next) => {
   }
 
   await next();
+});
+
+app.get("/sse", async (c) => {
+  const { readable, writable } = new TransformStream();
+  const writer = writable.getWriter();
+  const encoder = new TextEncoder();
+  const url = new URL(c.req.url);
+
+  try {
+    writer.write(encoder.encode(`event: endpoint\ndata: ${url.origin}/mcp\n\n`));
+
+    const keepAlive = setInterval(() => {
+      writer.write(encoder.encode(`: keepalive\n\n`)).catch(() => clearInterval(keepAlive));
+    }, 15000);
+
+    c.req.raw.signal.addEventListener("abort", () => {
+      clearInterval(keepAlive);
+      writer.close().catch(() => {});
+    });
+  } catch {
+    writer.close().catch(() => {});
+  }
+
+  return new Response(readable, {
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      "Connection": "keep-alive",
+    },
+  });
+});
+
+app.get("/mcp", (c) => {
+  return c.json({
+    jsonrpc: "2.0",
+    result: {
+      protocolVersion: "2024-11-05",
+      capabilities: {
+        tools: { supported: true },
+        resources: { supported: true },
+      },
+      serverInfo: {
+        name: "memocean-mcp-server",
+        version: "1.0.0",
+      },
+    },
+  });
+});
+
+app.delete("/mcp", (c) => {
+  return c.json({ status: "terminated" });
 });
 
 app.post("/mcp", async (c) => {
