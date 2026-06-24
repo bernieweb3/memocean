@@ -5,6 +5,8 @@ compatibility_date = "2024-09-23"
 # Account ID sẽ được inject từ GitHub Actions
 # account_id = ""
 
+compatibility_flags = ["nodejs_compat"]
+
 [env.production]
 workers_dev = false
 
