@@ -17,7 +17,7 @@
     "test": "vitest"
   },
   "dependencies": {
-    "@memocean/crypto": "^1.0.0",
+    "@memocean/crypto": "workspace:*",
     "uuid": "^9.0.0"
   },
   "devDependencies": {

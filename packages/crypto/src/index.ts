@@ -130,12 +130,13 @@ export class CryptoModule {
     assertId(projectId, "projectId");
 
     const subtle = getCrypto().subtle;
-    const imported = await subtle.importKey("raw", this.masterSecret, "HKDF", false, ["deriveBits"]);
+    const ms = this.masterSecret as BufferSource;
+    const imported = await subtle.importKey("raw", ms, "HKDF", false, ["deriveBits"]);
     const bits = await subtle.deriveBits(
       {
         name: "HKDF",
         hash: "SHA-256",
-        salt: projectSalt,
+        salt: projectSalt as BufferSource,
         info: new TextEncoder().encode(`memocean:v1:project:${projectId}`),
       },
       imported,
@@ -154,7 +155,8 @@ export class CryptoModule {
     assertKeyVersion(keyVersion);
 
     const subtle = getCrypto().subtle;
-    const imported = await subtle.importKey("raw", projectKeyMaterial, "HKDF", false, ["deriveKey"]);
+    const pkm = projectKeyMaterial as BufferSource;
+    const imported = await subtle.importKey("raw", pkm, "HKDF", false, ["deriveKey"]);
 
     return subtle.deriveKey(
       {
@@ -242,9 +244,9 @@ export class CryptoModule {
       );
 
       const plaintextBytes = await getCrypto().subtle.decrypt(
-        { name: "AES-GCM", iv, tagLength: 128, additionalData: aad },
+        { name: "AES-GCM", iv: iv as BufferSource, tagLength: 128, additionalData: aad },
         sessionKey,
-        ciphertext
+        ciphertext as BufferSource
       );
 
       return new TextDecoder().decode(plaintextBytes);
