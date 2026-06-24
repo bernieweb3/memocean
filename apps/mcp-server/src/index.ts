@@ -1,9 +1,9 @@
 import { Hono } from "hono";
 import { MemOceanSDK } from "@memocean/sdk";
-import type { MemOceanConfig, CloudflareBindings } from "@memocean/core";
+import type { MemOceanConfig } from "@memocean/core";
 import { validateAnalyzeArgs, validateRecallArgs, validateRememberArgs } from "./tools.js";
 
-function getApiSecretKey(env: Record<string, string | undefined>): string {
+function getApiSecretKey(env: Env): string {
   const key = env.API_SECRET_KEY;
   if (!key || key.length < 32) {
     throw new Error("API_SECRET_KEY must be set and >= 32 chars");
@@ -48,68 +48,30 @@ async function parseJsonBody(c: { req: { header: (name: string) => string | unde
   return parsed as JsonRpcBody;
 }
 
-function getBindings(): CloudflareBindings {
-  const db = {
-    prepare: (sql: string) => ({
-      bind: (...params: unknown[]) => ({
-        run: async () => {
-          console.log("[D1] exec:", sql, params.length);
-          return { success: true };
-        },
-        all: async <T = Record<string, unknown>>() => {
-          console.log("[D1] query:", sql, params.length);
-          return { results: [] as T[], success: true };
-        },
-        first: async <T = Record<string, unknown>>() => {
-          console.log("[D1] first:", sql, params.length);
-          return null as T | null;
-        },
-      }),
-    }),
-    exec: async (sql: string) => {
-      console.log("[D1] exec:", sql);
-      return { success: true };
-    },
-    batch: async (_statements: unknown[]) => ({ success: true }),
-    dump: async () => new Uint8Array(),
-  };
+type Env = {
+  DB: D1Database;
+  R2: R2Bucket;
+  KV: KVNamespace;
+  API_SECRET_KEY: string;
+  MEMOCEAN_MASTER_SECRET?: string;
+  MEMOCEAN_PROJECT_SALT?: string;
+  MEMOCEAN_KEY_VERSION?: string;
+  MEMOCEAN_ALLOW_EXTERNAL_LLM?: string;
+  MEMOCEAN_PRIMARY_PROVIDER?: string;
+  GROQ_API_KEY?: string;
+  GROQ_MODEL?: string;
+  OPENROUTER_API_KEY?: string;
+  OPENROUTER_MODEL?: string;
+  NVIDIA_NIM_API_KEY?: string;
+  NVIDIA_NIM_MODEL?: string;
+};
 
-  return {
-    DB: db,
-    R2: {
-      put: async (_key: string, _value: Uint8Array | ArrayBuffer | string, _options?: Record<string, unknown>) => {
-        console.log("[R2] put");
-        return {};
-      },
-      get: async (_key: string) => {
-        console.log("[R2] get");
-        return null;
-      },
-      delete: async (_key: string) => {
-        console.log("[R2] delete");
-      },
-    },
-    KV: {
-      get: async (_key: string) => {
-        console.log("[KV] get");
-        return null;
-      },
-      put: async (_key: string, _value: string, _options?: Record<string, unknown>) => {
-        console.log("[KV] put");
-      },
-      delete: async (_key: string) => {
-        console.log("[KV] delete");
-      },
-    },
-  };
-}
-
-function getConfig(env: Record<string, string | undefined>): MemOceanConfig {
+function getConfig(env: Env): MemOceanConfig {
   const allowExternal = env.MEMOCEAN_ALLOW_EXTERNAL_LLM === "true";
   const primaryProvider = (env.MEMOCEAN_PRIMARY_PROVIDER || "groq") as MemOceanConfig["llm"]["primaryProvider"];
 
   const config: MemOceanConfig = {
-    bindings: getBindings(),
+    bindings: { DB: env.DB as never, R2: env.R2 as never, KV: env.KV as never },
     llm: {
       allowExternal,
       primaryProvider,
@@ -146,7 +108,7 @@ app.use("*", async (c, next) => {
     return await next();
   }
 
-  const secret = getApiSecretKey(c.env as Record<string, string | undefined>);
+  const secret = getApiSecretKey(c.env as unknown as Env);
 
   const auth = c.req.header("Authorization");
   if (!auth?.startsWith("Bearer ")) {
@@ -309,7 +271,7 @@ app.post("/mcp", async (c) => {
 
     const toolName = body.params?.name;
     const args = body.params?.arguments;
-    const sdk = new MemOceanSDK(getConfig(c.env as Record<string, string | undefined>));
+    const sdk = new MemOceanSDK(getConfig(c.env as unknown as Env));
     let result: { content: Array<{ type: "text"; text: string }> };
 
     switch (toolName) {

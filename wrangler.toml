@@ -1,6 +1,20 @@
 name = "memocean-mcp-server"
 main = "apps/mcp-server/src/index.ts"
 compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+[[r2_buckets]]
+binding = "R2"
+bucket_name = "memocean"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "memocean"
+database_id = "0cd67a7d-e4f0-4b5c-96e4-3c8ee54a8907"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "8728d1f130a64fd689d06899e2104108"
 
 [env.production]
 workers_dev = false
@@ -10,20 +24,6 @@ workers_dev = true
 
 [env.dev]
 workers_dev = true
-
-# Bindings (example — adjust IDs)
-[[env.production.r2_buckets]]
-binding = "R2_BUCKET"
-bucket_name = "memocean-prod"
-
-[[env.production.d1_databases]]
-binding = "DB"
-database_name = "memocean-prod"
-database_id = "your-db-id"
-
-[[env.production.kv_namespaces]]
-binding = "KV"
-id = "your-kv-id"
 
 # Secrets MUST be set via:
 # wrangler secret put API_SECRET_KEY --env production
