@@ -3,20 +3,12 @@ import { MemOceanSDK } from "@memocean/sdk";
 import type { MemOceanConfig, CloudflareBindings } from "@memocean/core";
 import { validateAnalyzeArgs, validateRecallArgs, validateRememberArgs } from "./tools.js";
 
-// CŨ — throw ở top-level (fail khi deploy):
-// const API_SECRET_KEY = process.env.API_SECRET_KEY;
-// if (!API_SECRET_KEY || API_SECRET_KEY.length < 32) {
-//   throw new Error("API_SECRET_KEY must be set and >= 32 chars");
-// }
-
-// MỚI — lazy validation trong middleware:
-const API_SECRET_KEY = process.env.API_SECRET_KEY;
-
-function validateAuthConfig(): string {
-  if (!API_SECRET_KEY || API_SECRET_KEY.length < 32) {
+function getApiSecretKey(env: Record<string, string | undefined>): string {
+  const key = env.API_SECRET_KEY;
+  if (!key || key.length < 32) {
     throw new Error("API_SECRET_KEY must be set and >= 32 chars");
   }
-  return API_SECRET_KEY;
+  return key;
 }
 
 const MAX_BODY_BYTES = 1024 * 1024;
@@ -112,9 +104,9 @@ function getBindings(): CloudflareBindings {
   };
 }
 
-function getConfig(): MemOceanConfig {
-  const allowExternal = process.env.MEMOCEAN_ALLOW_EXTERNAL_LLM === "true";
-  const primaryProvider = (process.env.MEMOCEAN_PRIMARY_PROVIDER || "groq") as MemOceanConfig["llm"]["primaryProvider"];
+function getConfig(env: Record<string, string | undefined>): MemOceanConfig {
+  const allowExternal = env.MEMOCEAN_ALLOW_EXTERNAL_LLM === "true";
+  const primaryProvider = (env.MEMOCEAN_PRIMARY_PROVIDER || "groq") as MemOceanConfig["llm"]["primaryProvider"];
 
   const config: MemOceanConfig = {
     bindings: getBindings(),
@@ -122,31 +114,35 @@ function getConfig(): MemOceanConfig {
       allowExternal,
       primaryProvider,
       groq: {
-        apiKey: process.env.GROQ_API_KEY || "",
-        model: process.env.GROQ_MODEL || "llama-3.1-70b-versatile",
+        apiKey: env.GROQ_API_KEY || "",
+        model: env.GROQ_MODEL || "llama-3.1-70b-versatile",
       },
       openrouter: {
-        apiKey: process.env.OPENROUTER_API_KEY || "",
-        model: process.env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
+        apiKey: env.OPENROUTER_API_KEY || "",
+        model: env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
       },
       nvidia: {
-        apiKey: process.env.NVIDIA_NIM_API_KEY || "",
-        model: process.env.NVIDIA_NIM_MODEL || "meta/llama-3.1-70b-instruct",
+        apiKey: env.NVIDIA_NIM_API_KEY || "",
+        model: env.NVIDIA_NIM_MODEL || "meta/llama-3.1-70b-instruct",
       },
     },
   };
 
-  if (process.env.MEMOCEAN_MASTER_SECRET) {
-    config.masterSecret = process.env.MEMOCEAN_MASTER_SECRET;
-    config.projectSalt = process.env.MEMOCEAN_PROJECT_SALT;
-    config.keyVersion = Number.parseInt(process.env.MEMOCEAN_KEY_VERSION || "1", 10);
+  if (env.MEMOCEAN_MASTER_SECRET) {
+    config.masterSecret = env.MEMOCEAN_MASTER_SECRET;
+    config.projectSalt = env.MEMOCEAN_PROJECT_SALT;
+    config.keyVersion = Number.parseInt(env.MEMOCEAN_KEY_VERSION || "1", 10);
   }
 
   return config;
 }
 
 app.use("*", async (c, next) => {
-  const secret = validateAuthConfig(); // lazy, chỉ chạy khi request đến
+  if (c.req.path === "/health" && c.req.method === "GET") {
+    return c.json({ status: "ok", service: "memocean-mcp-server" });
+  }
+
+  const secret = getApiSecretKey(c.env as Record<string, string | undefined>);
 
   const auth = c.req.header("Authorization");
   if (!auth?.startsWith("Bearer ")) {
@@ -258,7 +254,7 @@ app.post("/mcp", async (c) => {
 
     const toolName = body.params?.name;
     const args = body.params?.arguments;
-    const sdk = new MemOceanSDK(getConfig());
+    const sdk = new MemOceanSDK(getConfig(c.env as Record<string, string | undefined>));
     let result: { content: Array<{ type: "text"; text: string }> };
 
     switch (toolName) {
@@ -310,7 +306,5 @@ app.post("/mcp", async (c) => {
     }, 500);
   }
 });
-
-app.get("/health", (c) => c.json({ status: "ok" }));
 
 export default app;
