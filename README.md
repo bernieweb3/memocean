@@ -113,4 +113,4 @@ npx wrangler secret put MEMOCEAN_MASTER_SECRET
 
 ## License
 
-MIT
+Apache 2.0 License
