@@ -1,0 +1,48 @@
+name: Deploy MCP Server to Cloudflare Workers
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: 'pnpm'
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r --sort build
+
+      - name: Deploy to Cloudflare Workers
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: apps/mcp-server
+          command: deploy
+          secrets: |
+            API_SECRET_KEY
+            MEMOCEAN_MASTER_SECRET
+            MEMOCEAN_PROJECT_SALT
+            GROQ_API_KEY
+            OPENROUTER_API_KEY
+            NVIDIA_NIM_API_KEY
+        env:
+          API_SECRET_KEY: ${{ secrets.API_SECRET_KEY }}
+          MEMOCEAN_MASTER_SECRET: ${{ secrets.MEMOCEAN_MASTER_SECRET }}
+          MEMOCEAN_PROJECT_SALT: ${{ secrets.MEMOCEAN_PROJECT_SALT }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
