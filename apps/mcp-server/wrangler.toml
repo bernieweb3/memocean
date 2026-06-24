@@ -31,3 +31,18 @@ binding = "KV"
 id = "8728d1f130a64fd689d06899e2104108"
 
 # Secrets sẽ được set qua wrangler secret put trong CI
+
+[observability]
+enabled = false
+head_sampling_rate = 1
+
+[observability.logs]
+enabled = true
+head_sampling_rate = 1
+persist = true
+invocation_logs = true
+
+[observability.traces]
+enabled = false
+persist = true
+head_sampling_rate = 1
