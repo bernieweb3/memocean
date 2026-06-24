@@ -1,0 +1,6 @@
+packages:
+  - packages/crypto
+  - packages/storage
+  - packages/core
+  - packages/sdk
+  - apps/mcp-server

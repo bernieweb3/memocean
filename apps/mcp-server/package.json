@@ -1,0 +1,23 @@
+{
+  "name": "memocean-mcp-server",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "wrangler dev",
+    "build": "tsc",
+    "deploy": "wrangler deploy",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "hono": "^4.0.0",
+    "@hono/node-server": "^2.0.0",
+    "@memocean/core": "workspace:*",
+    "@memocean/sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@cloudflare/workers-types": "^4.0.0",
+    "wrangler": "^3.0.0",
+    "@types/node": "^20.0.0",
+    "vitest": "^1.0.0"
+  }
+}
