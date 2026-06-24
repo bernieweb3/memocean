@@ -99,63 +99,81 @@ function getConfig(env: Env): MemOceanConfig {
   return config;
 }
 
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+  "Access-Control-Max-Age": "86400",
+};
+
 app.use("*", async (c, next) => {
-  if (c.req.path === "/health" && c.req.method === "GET") {
-    return c.json({ status: "ok", service: "memocean-mcp-server" });
+  if (c.req.method === "OPTIONS") {
+    return new Response(null, { headers: CORS_HEADERS });
   }
 
-  if (c.req.path === "/sse" && c.req.method === "GET") {
-    return await next();
-  }
+  const publicPaths = ["/sse", "/health", "/debug/"];
+  const isPublic = publicPaths.some(p => c.req.path.startsWith(p));
 
-  if (c.req.path.startsWith("/debug/")) {
-    return await next();
-  }
-
-  const secret = getApiSecretKey(c.env as unknown as Env);
-
-  const auth = c.req.header("Authorization");
-  if (!auth?.startsWith("Bearer ")) {
-    return c.json({ error: "Unauthorized" }, 401);
-  }
-
-  const token = auth.slice("Bearer ".length);
-  if (!timingSafeEqualString(token, secret)) {
-    return c.json({ error: "Unauthorized" }, 401);
+  if (!isPublic) {
+    const secret = getApiSecretKey(c.env as unknown as Env);
+    const auth = c.req.header("Authorization");
+    if (!auth?.startsWith("Bearer ")) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    if (!timingSafeEqualString(auth.slice("Bearer ".length), secret)) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
   }
 
   await next();
+
+  if (c.res && !c.res.headers.has("Access-Control-Allow-Origin")) {
+    c.res.headers.set("Access-Control-Allow-Origin", "*");
+  }
 });
 
 app.get("/sse", async (c) => {
-  const { readable, writable } = new TransformStream();
-  const writer = writable.getWriter();
   const encoder = new TextEncoder();
   const url = new URL(c.req.url);
+  let cleanup: (() => void) | undefined;
 
-  try {
-    writer.write(encoder.encode(`event: endpoint\ndata: ${url.origin}/mcp\n\n`));
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(`event: endpoint\ndata: ${url.origin}/mcp\n\n`));
 
-    const keepAlive = setInterval(() => {
-      writer.write(encoder.encode(`: keepalive\n\n`)).catch(() => clearInterval(keepAlive));
-    }, 15000);
+      const keepAlive = setInterval(() => {
+        try {
+          controller.enqueue(encoder.encode(": keepalive\n\n"));
+        } catch {
+          clearInterval(keepAlive);
+          try { controller.close(); } catch {}
+        }
+      }, 3000);
 
-    c.req.raw.signal.addEventListener("abort", () => {
-      clearInterval(keepAlive);
-      writer.close().catch(() => {});
-    });
-  } catch {
-    writer.close().catch(() => {});
-  }
+      c.req.raw.signal.addEventListener("abort", () => {
+        clearInterval(keepAlive);
+        try { controller.close(); } catch {}
+      });
 
-  return new Response(readable, {
+      cleanup = () => clearInterval(keepAlive);
+    },
+    cancel() {
+      cleanup?.();
+    },
+  });
+
+  return new Response(stream, {
     headers: {
       "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
+      "Cache-Control": "no-cache, no-transform",
       "Connection": "keep-alive",
+      "X-Accel-Buffering": "no",
+      ...CORS_HEADERS,
     },
   });
 });
+
+app.get("/health", (c) => c.json({ status: "ok", service: "memocean-mcp-server" }));
 
 app.get("/mcp", (c) => {
   return c.json({
