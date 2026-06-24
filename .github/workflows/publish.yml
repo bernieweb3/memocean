@@ -1,0 +1,39 @@
+name: Publish to npm
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Upgrade npm
+        run: npm install -g npm@latest
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm -r --sort build
+
+      - run: pnpm -r typecheck
+
+      - name: Publish packages
+        run: |
+          cd packages/crypto && npm publish --access public --provenance
+          cd ../storage && npm publish --access public --provenance
+          cd ../core && npm publish --access public --provenance
+          cd ../sdk && npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ""
