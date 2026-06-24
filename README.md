@@ -1,10 +1,23 @@
-# MemOcean
+# MemOcean MCP Server
+
+[![Deploy](https://img.shields.io/badge/deployed-cloudflare-orange)](https://memocean-mcp-server.work-hackonteam.workers.dev/health)
 
 **AI coding memory with zero-knowledge E2EE, powered by Cloudflare.**
 
 MemOcean is the Web2 port of "Kage Sensei" — a persistent memory layer for AI coding agents. It replaces decentralized storage (Walrus/Arweave) with Cloudflare's high-performance edge stack (R2, D1, KV), while maintaining **Zero-Knowledge End-to-End Encryption** and **MCP Streamable HTTP** support.
 
 AI agents (Claude Code, Cursor, Codex, etc.) use MemOcean to remember past sessions, learn project patterns, and recall relevant context — all without the server ever seeing plaintext data.
+
+## Status
+
+| Component | Status |
+|-----------|--------|
+| MCP Server | ✅ Deployed — `https://memocean-mcp-server.work-hackonteam.workers.dev` |
+| E2EE Crypto (AES-256-GCM + HKDF) | ✅ Implemented |
+| Storage Adapters (R2, D1, KV) | ✅ Implemented |
+| SDK (`@memocean/sdk`) | ✅ Implemented |
+| CI/CD (Trusted Publishing) | ✅ Configured |
+| npm publish | ⏳ Pending
 
 ---
 
