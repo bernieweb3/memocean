@@ -4,16 +4,28 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      version_type:
+        description: 'Version bump type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
 
 permissions:
   id-token: write
-  contents: read
+  contents: write # Cần write để push version bump + tag
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # Lấy full history để git tag hoạt động
 
       - uses: pnpm/action-setup@v4
         with:
@@ -28,11 +40,40 @@ jobs:
       - run: pnpm -r --sort build
       - run: pnpm -r typecheck
 
-      - name: Publish packages
+      - name: Configure Git
         run: |
-          cd packages/crypto && npm publish --access public
-          cd ../storage && npm publish --access public
-          cd ../core && npm publish --access public
-          cd ../sdk && npm publish --access public
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Bump versions & Publish
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # Xác định version type
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            # Với release event, dùng tag name làm version (bỏ prefix v)
+            VERSION=${GITHUB_REF#refs/tags/v}
+            VERSION_TYPE="" # Không bump, dùng exact version từ tag
+          else
+            VERSION_TYPE="${{ github.event.inputs.version_type }}"
+          fi
+
+          # Bump version cho TẤT CẢ packages trong monorepo
+          if [[ -n "$VERSION_TYPE" ]]; then
+            pnpm -r exec npm version $VERSION_TYPE --no-git-tag-version
+          elif [[ -n "$VERSION" ]]; then
+            pnpm -r exec npm version $VERSION --no-git-tag-version
+          fi
+
+          # Publish theo đúng thứ tự dependency
+          cd packages/crypto && npm publish --access public
+          cd ../storage && npm publish --access public  
+          cd ../core && npm publish --access public
+          cd ../sdk && npm publish --access public
+
+          # Commit và push version mới + tag
+          git add .
+          git commit -m "chore: bump versions to $(cat packages/sdk/package.json | jq -r .version)"
+          git tag -a "v$(cat packages/sdk/package.json | jq -r .version)" -m "Release v$(cat packages/sdk/package.json | jq -r .version)"
+          git push origin main --tags
