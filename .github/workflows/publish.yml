@@ -17,16 +17,12 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 9
           run_install: false
 
       - uses: actions/setup-node@v6
         with:
           node-version: '24'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Upgrade npm
-        run: npm install -g npm@latest
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm -r --sort build
