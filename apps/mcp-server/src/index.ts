@@ -1,5 +1,4 @@
 import { Hono } from "hono";
-import { serve } from "@hono/node-server";
 import { MemOceanSDK } from "@memocean/sdk";
 import type { MemOceanConfig, CloudflareBindings } from "@memocean/core";
 import { validateAnalyzeArgs, validateRecallArgs, validateRememberArgs } from "./tools.js";
@@ -313,14 +312,5 @@ app.post("/mcp", async (c) => {
 });
 
 app.get("/health", (c) => c.json({ status: "ok" }));
-
-const port = Number.parseInt(process.env.PORT || "3000", 10);
-
-if (typeof process !== "undefined" && process.env.NODE_ENV !== "test") {
-  serve({
-    fetch: app.fetch,
-    port,
-  });
-}
 
 export default app;
