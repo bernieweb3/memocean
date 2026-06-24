@@ -30,9 +30,9 @@ jobs:
 
       - name: Publish packages
         run: |
-          cd packages/crypto && npm publish --access public --provenance
-          cd ../storage && npm publish --access public --provenance
-          cd ../core && npm publish --access public --provenance
-          cd ../sdk && npm publish --access public --provenance
+          cd packages/crypto && npm publish --access public
+          cd ../storage && npm publish --access public
+          cd ../core && npm publish --access public
+          cd ../sdk && npm publish --access public
         env:
-          NODE_AUTH_TOKEN: ""
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
