@@ -20,6 +20,9 @@ database_id = "0cd67a7d-e4f0-4b5c-96e4-3c8ee54a8907"
 binding = "KV"
 id = "8728d1f130a64fd689d06899e2104108"
 
+[vars]
+MEMOCEAN_ALLOW_EXTERNAL_LLM = "false"
+
 [env.production]
 workers_dev = false
 

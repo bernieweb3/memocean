@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { MemOceanSDK } from "@memocean/sdk";
+import { MemOceanError } from "@memocean/core";
 import type { MemOceanConfig } from "@memocean/core";
 import { validateAnalyzeArgs, validateRecallArgs, validateRememberArgs } from "./tools.js";
 
@@ -68,27 +69,30 @@ type Env = {
 
 function getConfig(env: Env): MemOceanConfig {
   const allowExternal = env.MEMOCEAN_ALLOW_EXTERNAL_LLM === "true";
-  const primaryProvider = (env.MEMOCEAN_PRIMARY_PROVIDER || "groq") as MemOceanConfig["llm"]["primaryProvider"];
 
   const config: MemOceanConfig = {
     bindings: { DB: env.DB as never, R2: env.R2 as never, KV: env.KV as never },
     llm: {
       allowExternal,
-      primaryProvider,
-      groq: {
-        apiKey: env.GROQ_API_KEY || "",
-        model: env.GROQ_MODEL || "llama-3.1-70b-versatile",
-      },
-      openrouter: {
-        apiKey: env.OPENROUTER_API_KEY || "",
-        model: env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
-      },
-      nvidia: {
-        apiKey: env.NVIDIA_NIM_API_KEY || "",
-        model: env.NVIDIA_NIM_MODEL || "meta/llama-3.1-70b-instruct",
-      },
+      primaryProvider: "groq",
     },
   };
+
+  if (allowExternal) {
+    config.llm.primaryProvider = (env.MEMOCEAN_PRIMARY_PROVIDER || "groq") as MemOceanConfig["llm"]["primaryProvider"];
+    config.llm.groq = {
+      apiKey: env.GROQ_API_KEY || "",
+      model: env.GROQ_MODEL || "llama-3.1-70b-versatile",
+    };
+    config.llm.openrouter = {
+      apiKey: env.OPENROUTER_API_KEY || "",
+      model: env.OPENROUTER_MODEL || "openai/gpt-4o-mini",
+    };
+    config.llm.nvidia = {
+      apiKey: env.NVIDIA_NIM_API_KEY || "",
+      model: env.NVIDIA_NIM_MODEL || "meta/llama-3.1-70b-instruct",
+    };
+  }
 
   if (env.MEMOCEAN_MASTER_SECRET) {
     config.masterSecret = env.MEMOCEAN_MASTER_SECRET;
@@ -111,8 +115,8 @@ app.use("*", async (c, next) => {
     return new Response(null, { headers: CORS_HEADERS });
   }
 
-  const publicPaths = ["/sse", "/health", "/debug/"];
-  const isPublic = publicPaths.some(p => c.req.path.startsWith(p));
+  const publicPaths = new Set(["/health", "/sse"]);
+  const isPublic = publicPaths.has(c.req.path);
 
   if (!isPublic) {
     const secret = getApiSecretKey(c.env as unknown as Env);
@@ -174,6 +178,19 @@ app.get("/sse", async (c) => {
 });
 
 app.get("/health", (c) => c.json({ status: "ok", service: "memocean-mcp-server" }));
+
+app.get("/ready", async (c) => {
+  const env = c.env as Env;
+  const checks: Record<string, boolean | string> = {};
+  try {
+    await env.DB.prepare("SELECT 1").run();
+    checks.d1 = true;
+  } catch (e) {
+    checks.d1 = e instanceof Error ? e.message : "unreachable";
+  }
+  const ok = checks.d1 === true;
+  return c.json({ ok, checks }, ok ? 200 : 503);
+});
 
 app.get("/mcp", (c) => {
   return c.json({
@@ -238,7 +255,7 @@ app.post("/mcp", async (c) => {
                   projectId: { type: "string", pattern: "^[a-zA-Z0-9_-]{8,128}$" },
                   agentType: { type: "string", maxLength: 64 },
                 },
-                required: ["content", "summary", "tags", "projectId", "agentType"],
+                required: ["content", "projectId"],
               },
             },
             {
@@ -338,25 +355,30 @@ app.post("/mcp", async (c) => {
       stack: error instanceof Error ? error.stack : undefined,
     });
 
-    const stack = error instanceof Error ? error.stack : undefined;
-    console.error("MCP error stack", stack);
+    const isValidation = error instanceof MemOceanError && error.code === "INVALID_PARAMS";
+    const code = isValidation ? -32602 : -32603;
+    const status = isValidation ? 400 : 500;
     const message = error instanceof Error ? error.message : "Internal error";
     return c.json({
       jsonrpc: "2.0",
       id: body?.id ?? null,
-      error: { code: -32603, message },
-    }, 500);
+      error: { code, message },
+    }, status);
   }
 });
 
 app.get("/debug/bindings", (c) => {
+  if (c.env && typeof c.env === "object" && "ENVIRONMENT" in (c.env as object)) {
+    const env = c.env as Record<string, unknown>;
+    if (env.ENVIRONMENT === "production") {
+      return c.json({ error: "Not available in production" }, 403);
+    }
+  }
   const env = c.env as Record<string, unknown>;
   return c.json({
     DB: typeof env.DB === "object" && env.DB !== null,
     R2: typeof env.R2 === "object" && env.R2 !== null,
     KV: typeof env.KV === "object" && env.KV !== null,
-    hasMasterSecret: typeof env.MEMOCEAN_MASTER_SECRET === "string",
-    hasProjectSalt: typeof env.MEMOCEAN_PROJECT_SALT === "string",
   });
 });
 

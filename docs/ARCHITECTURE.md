@@ -8,7 +8,7 @@ MemOcean is an AI coding memory and project-aware mentoring platform. It is the 
 - **Edge Compute:** Cloudflare Workers (Hono framework).
 - **Storage:** Cloudflare R2 (S3-compatible, E2EE blobs), Cloudflare D1 (SQLite, FTS5 metadata), Cloudflare KV (Cache, Rate-limits).
 - **Protocol:** MCP (Model Context Protocol) via Streamable HTTP and STDIO.
-- **Security:** AES-256-GCM E2EE, HKDF key derivation. Server NEVER sees plaintext data.
+- **Security:** AES-256-GCM E2EE, HKDF key derivation. Server never sees plaintext encrypted memory payloads, but processes plaintext searchable metadata and analysis inputs when external LLM is explicitly enabled.
 
 ## 3. Core Modules
 
@@ -22,9 +22,8 @@ MemOcean is an AI coding memory and project-aware mentoring platform. It is the 
 - **KVAdapter:** Handles API key validation, rate-limiting, and ephemeral MCP session states.
 
 ### 3.3. `apps/mcp-server` (The Interface)
-- Built with **Hono** and `@modelcontextprotocol/sdk`.
-- Supports **Streamable HTTP** (`POST /mcp`, `GET /mcp`, `DELETE /mcp`) for remote AI agents.
-- Supports **STDIO** for local CLI execution.
+- Built with **Hono**.
+- Supports **Streamable HTTP** (`POST /mcp`, `GET /mcp`, `DELETE /mcp`) and **SSE** (`GET /sse`) for remote AI agents.
 - **MCP Tools:**
   - `ocean_remember`: Save encrypted memory.
   - `ocean_recall`: FTS5 search via D1.

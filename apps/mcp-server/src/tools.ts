@@ -1,3 +1,4 @@
+import { MemOceanError } from "@memocean/core";
 import { MemOceanSDK } from "@memocean/sdk";
 import type { MemOceanConfig, MemoryInput } from "@memocean/core";
 
@@ -10,31 +11,35 @@ const MAX_CODE_CHARS = 200 * 1024;
 const MAX_TOKEN_LIMIT = 8000;
 
 export function assertString(value: unknown, name: string, maxLen: number): string {
-  if (typeof value !== "string") throw new Error(`${name} must be string`);
-  if (value.length === 0 || value.length > maxLen) throw new Error(`${name} invalid length`);
+  if (typeof value !== "string") throw new MemOceanError(`${name} must be string`, "INVALID_PARAMS");
+  if (value.length === 0 || value.length > maxLen) throw new MemOceanError(`${name} invalid length`, "INVALID_PARAMS");
   return value;
 }
 
 export function assertNumberLimit(value: unknown, fallback: number, max: number): number {
   if (value === undefined || value === null) return fallback;
-  if (typeof value !== "number" || !Number.isFinite(value)) throw new Error("Must be finite number");
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) value = parsed;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) throw new MemOceanError("Must be finite number", "INVALID_PARAMS");
   return Math.min(Math.max(Math.floor(value), 1), max);
 }
 
 export function assertId(value: unknown, name: string): string {
   const s = assertString(value, name, 128);
-  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(s)) throw new Error(`${name} invalid format`);
+  if (!/^[a-zA-Z0-9_-]{8,128}$/.test(s)) throw new MemOceanError(`${name} invalid format`, "INVALID_PARAMS");
   return s;
 }
 
 export function assertStringArray(value: unknown, name: string, maxItems: number, maxLen: number): string[] {
-  if (!Array.isArray(value)) throw new Error(`${name} must be array`);
-  if (value.length > maxItems) throw new Error(`${name} too many items`);
+  if (!Array.isArray(value)) throw new MemOceanError(`${name} must be array`, "INVALID_PARAMS");
+  if (value.length > maxItems) throw new MemOceanError(`${name} too many items`, "INVALID_PARAMS");
   return value.map((v, i) => assertString(v, `${name}[${i}]`, maxLen));
 }
 
 function assertObject(value: unknown, name: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error(`${name} must be object`);
+  if (typeof value !== "object" || value === null || Array.isArray(value)) throw new MemOceanError(`${name} must be object`, "INVALID_PARAMS");
   return value as Record<string, unknown>;
 }
 
@@ -46,12 +51,24 @@ export function validateRememberArgs(value: unknown): MemoryInput {
     assertId(input.sessionId, "sessionId");
   }
 
+  const agentType = input.agentType !== undefined
+    ? assertString(input.agentType, "agentType", 64)
+    : "mcp-client";
+
+  const tags = input.tags !== undefined
+    ? assertStringArray(input.tags, "tags", MAX_TAGS, MAX_TAG_CHARS)
+    : ["general"];
+
+  const summary = input.summary !== undefined
+    ? assertString(input.summary, "summary", MAX_SUMMARY_CHARS)
+    : `Memory from ${agentType}`;
+
   return {
     content: assertString(input.content, "content", MAX_CONTENT_CHARS),
-    summary: assertString(input.summary, "summary", MAX_SUMMARY_CHARS),
-    tags: assertStringArray(input.tags, "tags", MAX_TAGS, MAX_TAG_CHARS),
+    summary,
+    tags,
     projectId,
-    agentType: assertString(input.agentType, "agentType", 64),
+    agentType,
   };
 }
 

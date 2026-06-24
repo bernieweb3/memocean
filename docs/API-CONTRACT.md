@@ -66,13 +66,13 @@ Save an encrypted memory.
 
 **Constraints:**
 
-| Field | Validation | Error |
-|-------|------------|-------|
-| `content` | 1 ≤ len ≤ 65536 | `content invalid length` |
-| `summary` | 1 ≤ len ≤ 2048 | `summary invalid length` |
-| `tags` | 1..20 items, each 1..64 chars | `tags invalid length` |
-| `projectId` | 8..128 chars, `^[a-zA-Z0-9_-]+$` | `projectId invalid format` |
-| `agentType` | 1 ≤ len ≤ 64 | `agentType invalid length` |
+| Field | Validation | Default | Error |
+|-------|------------|---------|-------|
+| `content` | 1 ≤ len ≤ 65536 | required | `content invalid length` |
+| `summary` | 1 ≤ len ≤ 2048 | `"Memory from {agentType}"` | `summary invalid length` |
+| `tags` | 1..20 items, each 1..64 chars | `["general"]` | `tags invalid length` |
+| `projectId` | 8..128 chars, `^[a-zA-Z0-9_-]+$` | required | `projectId invalid format` |
+| `agentType` | 1 ≤ len ≤ 64 | `"mcp-client"` | `agentType invalid length` |
 
 ---
 
@@ -238,9 +238,10 @@ Analyze code via the Learn engine (multi-LLM fallback: Groq → OpenRouter → N
 
 | Code | Message | When |
 |------|---------|------|
+| `-32602` | *descriptive validation message* | Invalid arguments (HTTP 400) |
 | `-32601` | Method not found | Unknown `method` or `name` |
 | `-32601` | Tool not found | Unknown tool in `tools/call` |
-| `-32603` | Internal error | Unexpected server error |
+| `-32603` | Internal error | Unexpected server error (HTTP 500) |
 
 ### Auth Errors
 
@@ -252,8 +253,15 @@ Status: `401`
 
 ### Validation Errors
 
-Validation errors are thrown as `Error` with a descriptive message and caught by the MCP handler, returning `-32603`:
+Returned as `-32602 Invalid params` (HTTP 400) with a descriptive message:
 
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "error": { "code": -32602, "message": "content invalid length" }
+}
+```
 ```json
 {
   "jsonrpc": "2.0",
@@ -287,6 +295,7 @@ After receiving the `endpoint` event, send JSON-RPC messages via `POST /mcp` as 
 | `GROQ_API_KEY` | for analyze | Groq API key (primary LLM) |
 | `OPENROUTER_API_KEY` | for analyze | OpenRouter fallback |
 | `NVIDIA_NIM_API_KEY` | for analyze | NVIDIA NIM fallback |
+| `MEMOCEAN_ALLOW_EXTERNAL_LLM` | optional | Set `"true"` to enable external LLM for analyze (default: `"false"`) |
 
 ## SDK Usage (TypeScript)
 
