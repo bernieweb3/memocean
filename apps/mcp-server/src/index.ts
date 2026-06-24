@@ -108,6 +108,10 @@ app.use("*", async (c, next) => {
     return await next();
   }
 
+  if (c.req.path.startsWith("/debug/")) {
+    return await next();
+  }
+
   const secret = getApiSecretKey(c.env as unknown as Env);
 
   const auth = c.req.header("Authorization");
@@ -316,12 +320,26 @@ app.post("/mcp", async (c) => {
       stack: error instanceof Error ? error.stack : undefined,
     });
 
+    const stack = error instanceof Error ? error.stack : undefined;
+    console.error("MCP error stack", stack);
+    const message = error instanceof Error ? error.message : "Internal error";
     return c.json({
       jsonrpc: "2.0",
       id: body?.id ?? null,
-      error: { code: -32603, message: "Internal error" },
+      error: { code: -32603, message },
     }, 500);
   }
+});
+
+app.get("/debug/bindings", (c) => {
+  const env = c.env as Record<string, unknown>;
+  return c.json({
+    DB: typeof env.DB === "object" && env.DB !== null,
+    R2: typeof env.R2 === "object" && env.R2 !== null,
+    KV: typeof env.KV === "object" && env.KV !== null,
+    hasMasterSecret: typeof env.MEMOCEAN_MASTER_SECRET === "string",
+    hasProjectSalt: typeof env.MEMOCEAN_PROJECT_SALT === "string",
+  });
 });
 
 export default app;
